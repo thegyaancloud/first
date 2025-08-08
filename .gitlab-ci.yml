@@ -2,11 +2,7 @@ stages:
   - test_and_codequality
   - coverage_and_mutation
   - docker_build
-  - deploy_azure
-  - deploy_aws
-
-variables:
-  DOCKER_IMAGE_NAME: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG
+  - deploy
 
 code_quality:
   stage: test_and_codequality
@@ -20,7 +16,6 @@ code_quality:
       - pylint_report.txt
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_PIPELINE_SOURCE == "push"'
 
 tests:
   stage: test_and_codequality
@@ -37,7 +32,6 @@ tests:
     expire_in: 1 week
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_PIPELINE_SOURCE == "push"'
 
 test_coverage:
   stage: coverage_and_mutation
@@ -52,7 +46,6 @@ test_coverage:
     expire_in: 1 week
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_PIPELINE_SOURCE == "push"'
 
 docker_build:
   stage: docker_build
@@ -62,35 +55,96 @@ docker_build:
   before_script:
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
   script:
-    - docker build -t $DOCKER_IMAGE_NAME .
-    - docker push $DOCKER_IMAGE_NAME
-  only:
-    - main
+    - |
+      if [ "$CI_COMMIT_BRANCH" == "main" ]; then
+        TAGS="--tag $CI_REGISTRY_IMAGE:main --tag $CI_REGISTRY_IMAGE:sandbox --tag $CI_REGISTRY_IMAGE:$CI_PIPELINE_IID --tag $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
+      elif [ "$CI_COMMIT_BRANCH" == "develop" ]; then
+        TAGS="--tag $CI_REGISTRY_IMAGE:develop --tag $CI_REGISTRY_IMAGE:test --tag $CI_REGISTRY_IMAGE:$CI_PIPELINE_IID --tag $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
+      fi
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        TAGS="$TAGS --tag $CI_REGISTRY_IMAGE:$CI_COMMIT_TAG"
+      fi
+      docker build $TAGS .
+      docker push --all-tags $CI_REGISTRY_IMAGE
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop"'
+      when: on_success
 
-deploy_aws:
-  stage: deploy_aws
+.deploy_template: &deploy_template
+  script:
+    - echo "Deploying to $CI_ENVIRONMENT_NAME"
+    - export DOCKER_IMAGE_NAME_WITH_TAG=$CI_REGISTRY_IMAGE:$DEPLOY_TAG
+
+deploy_aws_dev:
+  stage: deploy
+  extends: .deploy_template
   image: amazon/aws-cli
   variables:
-    ECS_CLUSTER_NAME: "your-ecs-cluster-name"
-    ECS_SERVICE_NAME: "your-ecs-service-name"
-    AWS_DEFAULT_REGION: "us-east-1"
+    DEPLOY_TAG: "develop"
+  environment:
+    name: development/aws
+    url: http://dev.aws.example.com
   script:
-    - echo "Deploying to AWS ECS..."
-    - sed -i "s/__DOCKER_IMAGE_NAME__/$DOCKER_IMAGE_NAME/g" task-definition.json
+    - echo "Deploying to AWS Development environment..."
+    - sed -i "s|__DOCKER_IMAGE_NAME__|$CI_REGISTRY_IMAGE:$DEPLOY_TAG|g" task-definition.json
     - aws ecs register-task-definition --cli-input-json file://task-definition.json
-    - aws ecs update-service --cluster $ECS_CLUSTER_NAME --service $ECS_SERVICE_NAME --task-definition my-app
-  only:
-    - main
+    - aws ecs update-service --cluster $DEV_ECS_CLUSTER_NAME --service $DEV_ECS_SERVICE_NAME --task-definition my-app
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+      when: manual
+      allow_failure: true
 
-deploy_azure:
-  stage: deploy_azure
+deploy_azure_dev:
+  stage: deploy
+  extends: .deploy_template
   image: mcr.microsoft.com/azure-cli
   variables:
-    AZURE_RESOURCE_GROUP: "your-resource-group"
-    AZURE_APP_NAME: "your-app-name"
+    DEPLOY_TAG: "develop"
+  environment:
+    name: development/azure
+    url: http://dev.azure.example.com
   script:
-    - echo "Deploying to Azure App Service..."
+    - echo "Deploying to Azure Development environment..."
     - az login --service-principal -u $AZURE_CLIENT_ID -p $AZURE_CLIENT_SECRET --tenant $AZURE_TENANT_ID
-    - az webapp config container set --name $AZURE_APP_NAME --resource-group $AZURE_RESOURCE_GROUP --docker-custom-image-name $DOCKER_IMAGE_NAME --docker-registry-server-user $CI_REGISTRY_USER --docker-registry-server-password $CI_REGISTRY_PASSWORD
-  only:
-    - main
+    - az webapp config container set --name $DEV_AZURE_APP_NAME --resource-group $DEV_AZURE_RESOURCE_GROUP --docker-custom-image-name "$CI_REGISTRY_IMAGE:$DEPLOY_TAG" --docker-registry-server-user $CI_REGISTRY_USER --docker-registry-server-password $CI_REGISTRY_PASSWORD
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+      when: manual
+      allow_failure: true
+
+deploy_aws_sandbox:
+  stage: deploy
+  extends: .deploy_template
+  image: amazon/aws-cli
+  variables:
+    DEPLOY_TAG: "main"
+  environment:
+    name: sandbox/aws
+    url: http://sandbox.aws.example.com
+  script:
+    - echo "Deploying to AWS Sandbox environment..."
+    - sed -i "s|__DOCKER_IMAGE_NAME__|$CI_REGISTRY_IMAGE:$DEPLOY_TAG|g" task-definition.json
+    - aws ecs register-task-definition --cli-input-json file://task-definition.json
+    - aws ecs update-service --cluster $SANDBOX_ECS_CLUSTER_NAME --service $SANDBOX_ECS_SERVICE_NAME --task-definition my-app
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual
+      allow_failure: true
+
+deploy_azure_sandbox:
+  stage: deploy
+  extends: .deploy_template
+  image: mcr.microsoft.com/azure-cli
+  variables:
+    DEPLOY_TAG: "main"
+  environment:
+    name: sandbox/azure
+    url: http://sandbox.azure.example.com
+  script:
+    - echo "Deploying to Azure Sandbox environment..."
+    - az login --service-principal -u $AZURE_CLIENT_ID -p $AZURE_CLIENT_SECRET --tenant $AZURE_TENANT_ID
+    - az webapp config container set --name $SANDBOX_AZURE_APP_NAME --resource-group $SANDBOX_AZURE_RESOURCE_GROUP --docker-custom-image-name "$CI_REGISTRY_IMAGE:$DEPLOY_TAG" --docker-registry-server-user $CI_REGISTRY_USER --docker-registry-server-password $CI_REGISTRY_PASSWORD
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual
+      allow_failure: true
