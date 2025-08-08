@@ -1,0 +1,16 @@
+[MASTER]
+# Add any master-level options here
+
+[MESSAGES CONTROL]
+# Disable specific messages by their code
+# For example, to disable the 'missing-docstring' message:
+# disable=C0111
+disable=missing-docstring,invalid-name
+
+[REPORTS]
+# Configure report generation options
+output-format=text
+
+[FORMAT]
+# Configure formatting options
+max-line-length=120

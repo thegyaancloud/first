@@ -1,1 +1,4 @@
-Flask==2.0.1
+streamlit
+pylint
+pytest
+pytest-cov

@@ -1,13 +1,61 @@
 stages:
-  - build
-  - deploy_aws
+  - test_and_codequality
+  - coverage_and_mutation
+  - docker_build
   - deploy_azure
+  - deploy_aws
 
 variables:
   DOCKER_IMAGE_NAME: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG
 
-build:
-  stage: build
+code_quality:
+  stage: test_and_codequality
+  image: python:3.11-slim
+  before_script:
+    - pip install pylint
+  script:
+    - pylint --rcfile=.pylintrc $(find . -name "*.py" | grep -v "^./tests") --fail-under=3.4 | tee pylint_report.txt | tail -n 4
+  artifacts:
+    paths:
+      - pylint_report.txt
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+
+tests:
+  stage: test_and_codequality
+  image: python:3.11-slim
+  before_script:
+    - pip install pytest
+  script:
+    - pytest --ignore=kano-core --maxfail=1 --disable-warnings --junitxml=test-report.xml
+  artifacts:
+    paths:
+      - test-report.xml
+    reports:
+      junit: test-report.xml
+    expire_in: 1 week
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+
+test_coverage:
+  stage: coverage_and_mutation
+  image: python:3.11-slim
+  before_script:
+    - pip install pytest-cov pytest
+  script:
+    - pytest --ignore=kano-core --cov=. --cov-report=html --cov-report=term
+  artifacts:
+    paths:
+      - htmlcov/
+    expire_in: 1 week
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+
+docker_build:
+  stage: docker_build
   image: docker:latest
   services:
     - docker:dind
@@ -23,9 +71,9 @@ deploy_aws:
   stage: deploy_aws
   image: amazon/aws-cli
   variables:
-    ECS_CLUSTER_NAME: "your-ecs-cluster-name" # Please configure this in GitLab CI/CD variables
-    ECS_SERVICE_NAME: "your-ecs-service-name" # Please configure this in GitLab CI/CD variables
-    AWS_DEFAULT_REGION: "us-east-1" # Please configure this in GitLab CI/CD variables
+    ECS_CLUSTER_NAME: "your-ecs-cluster-name"
+    ECS_SERVICE_NAME: "your-ecs-service-name"
+    AWS_DEFAULT_REGION: "us-east-1"
   script:
     - echo "Deploying to AWS ECS..."
     - sed -i "s/__DOCKER_IMAGE_NAME__/$DOCKER_IMAGE_NAME/g" task-definition.json
@@ -38,8 +86,8 @@ deploy_azure:
   stage: deploy_azure
   image: mcr.microsoft.com/azure-cli
   variables:
-    AZURE_RESOURCE_GROUP: "your-resource-group" # Please configure this in GitLab CI/CD variables
-    AZURE_APP_NAME: "your-app-name" # Please configure this in GitLab CI/CD variables
+    AZURE_RESOURCE_GROUP: "your-resource-group"
+    AZURE_APP_NAME: "your-app-name"
   script:
     - echo "Deploying to Azure App Service..."
     - az login --service-principal -u $AZURE_CLIENT_ID -p $AZURE_CLIENT_SECRET --tenant $AZURE_TENANT_ID

@@ -1,10 +1,8 @@
-from flask import Flask
+import streamlit as st
 
-app = Flask(__name__)
+st.title('My First Streamlit App')
 
-@app.route('/')
-def hello_world():
-    return 'Hello, World!'
+st.write('Hello, world!')
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=80)
+if st.button('Click me'):
+    st.write('You clicked the button!')
