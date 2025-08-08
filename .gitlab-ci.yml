@@ -1,0 +1,48 @@
+stages:
+  - build
+  - deploy_aws
+  - deploy_azure
+
+variables:
+  DOCKER_IMAGE_NAME: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG
+
+build:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - docker build -t $DOCKER_IMAGE_NAME .
+    - docker push $DOCKER_IMAGE_NAME
+  only:
+    - main
+
+deploy_aws:
+  stage: deploy_aws
+  image: amazon/aws-cli
+  variables:
+    ECS_CLUSTER_NAME: "your-ecs-cluster-name" # Please configure this in GitLab CI/CD variables
+    ECS_SERVICE_NAME: "your-ecs-service-name" # Please configure this in GitLab CI/CD variables
+    AWS_DEFAULT_REGION: "us-east-1" # Please configure this in GitLab CI/CD variables
+  script:
+    - echo "Deploying to AWS ECS..."
+    - sed -i "s/__DOCKER_IMAGE_NAME__/$DOCKER_IMAGE_NAME/g" task-definition.json
+    - aws ecs register-task-definition --cli-input-json file://task-definition.json
+    - aws ecs update-service --cluster $ECS_CLUSTER_NAME --service $ECS_SERVICE_NAME --task-definition my-app
+  only:
+    - main
+
+deploy_azure:
+  stage: deploy_azure
+  image: mcr.microsoft.com/azure-cli
+  variables:
+    AZURE_RESOURCE_GROUP: "your-resource-group" # Please configure this in GitLab CI/CD variables
+    AZURE_APP_NAME: "your-app-name" # Please configure this in GitLab CI/CD variables
+  script:
+    - echo "Deploying to Azure App Service..."
+    - az login --service-principal -u $AZURE_CLIENT_ID -p $AZURE_CLIENT_SECRET --tenant $AZURE_TENANT_ID
+    - az webapp config container set --name $AZURE_APP_NAME --resource-group $AZURE_RESOURCE_GROUP --docker-custom-image-name $DOCKER_IMAGE_NAME --docker-registry-server-user $CI_REGISTRY_USER --docker-registry-server-password $CI_REGISTRY_PASSWORD
+  only:
+    - main
